@@ -71,10 +71,16 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     let prompt = Paragraph::new(format!("> {}", app.query));
     frame.render_widget(prompt, chunks[0]);
 
+    let available_height = chunks[1].height as usize;
+    app.set_viewport_height(available_height);
+
     let visible_indices = app.visible_indices();
+    let visible_len = visible_indices.len();
+    let end = (app.scroll_offset + available_height).min(visible_len);
     let items: Vec<ListItem> = visible_indices
+        .get(app.scroll_offset..end)
+        .unwrap_or(&[])
         .iter()
-        .take(chunks[1].height as usize)
         .map(|index| ListItem::new(command_line(&app.entries[*index].command, &app.query)))
         .collect();
 
@@ -82,8 +88,8 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .highlight_symbol("> ")
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut list_state = ListState::default();
-    if !visible_indices.is_empty() {
-        list_state.select(Some(app.selected));
+    if visible_len > 0 && app.selected < visible_len {
+        list_state.select(Some(app.selected.saturating_sub(app.scroll_offset)));
     }
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
 }
