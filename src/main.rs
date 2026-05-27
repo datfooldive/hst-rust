@@ -5,7 +5,9 @@ mod input;
 mod ui;
 
 use std::{
-    io::{self, Stderr},
+    fs::File,
+    io::{self, Read, Stderr, Write},
+    os::unix::io::AsRawFd,
     time::Duration,
 };
 
@@ -19,10 +21,12 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+use ratatui::layout::Position;
 use history::{HistorySource, detect_history_source, load_entries, source_from_path};
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
     backend::{Backend, ClearType, CrosstermBackend},
+    layout::Rect,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -59,29 +63,61 @@ fn startup_action(cli: Cli) -> StartupAction {
     StartupAction::RunTui(cli.history_file.map(|path| source_from_path(path, None)))
 }
 
-const PROMPT_HEIGHT: u16 = 10;
-
 fn accepted_command_output(app: &App) -> Option<&str> {
     app.accepted_command.as_deref()
 }
 
-fn prompt_terminal_options() -> TerminalOptions {
-    TerminalOptions {
-        viewport: Viewport::Inline(PROMPT_HEIGHT),
+const VIEWPORT_HEIGHT: u16 = 10;
+
+fn cursor_position() -> Option<(u16, u16)> {
+    let mut tty = File::open("/dev/tty").ok()?;
+    let fd = tty.as_raw_fd();
+
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
+
+    io::stderr().write_all(b"\x1b[6n").ok()?;
+    io::stderr().flush().ok()?;
+
+    let mut buf = [0u8; 32];
+    std::thread::sleep(Duration::from_millis(50));
+    let n = tty.read(&mut buf).unwrap_or(0);
+
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+    }
+
+    let resp = std::str::from_utf8(&buf[..n]).ok()?;
+    let resp = resp.strip_prefix('\x1b')?.strip_prefix('[')?;
+    let resp = resp.strip_suffix('R')?;
+    let mut parts = resp.split(';');
+    let row: u16 = parts.next()?.parse().ok()?;
+    Some((0, row))
 }
 
-fn clear_prompt<B: Backend>(terminal: &mut Terminal<B>) -> std::result::Result<(), B::Error> {
-    terminal.clear()?;
-    terminal.backend_mut().clear_region(ClearType::CurrentLine)?;
-    terminal.backend_mut().flush()
+fn clear_prompt<B: Backend>(terminal: &mut Terminal<B>, start_row: u16) -> std::result::Result<(), B::Error> {
+    let backend = terminal.backend_mut();
+    for y in 0..VIEWPORT_HEIGHT {
+        backend.set_cursor_position(Position::new(0, start_row + y))?;
+        backend.clear_region(ClearType::CurrentLine)?;
+    }
+    backend.set_cursor_position(Position::new(0, start_row))?;
+    backend.flush()
 }
 
 fn run(app: &mut App) -> Result<()> {
     {
         let _guard = TerminalGuard::activate()?;
-        let backend = CrosstermBackend::new(io::stderr());
-        let mut terminal = Terminal::with_options(backend, prompt_terminal_options())?;
+        let (col, row) = cursor_position().unwrap_or((0, 0));
+        let cols = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80);
+        let area = Rect::new(col, row, cols.saturating_sub(col), VIEWPORT_HEIGHT);
+        let mut terminal = Terminal::with_options(
+            CrosstermBackend::new(io::stderr()),
+            TerminalOptions { viewport: Viewport::Fixed(area) },
+        )?;
 
         loop {
             terminal.draw(|frame| ui::render(frame, app))?;
@@ -97,7 +133,7 @@ fn run(app: &mut App) -> Result<()> {
             }
         }
 
-        clear_prompt(&mut terminal)?;
+        clear_prompt(&mut terminal, row)?;
     }
 
     Ok(())
@@ -128,7 +164,7 @@ mod tests {
         cli::{Cli, Shell},
         history::{HistorySource, ShellKind},
     };
-    use ratatui::{Terminal, Viewport, backend::TestBackend, buffer::Buffer};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
     use std::path::PathBuf;
 
     fn app_with(commands: &[&str]) -> App {
@@ -205,23 +241,20 @@ mod tests {
     }
 
     #[test]
-    fn prompt_terminal_uses_inline_viewport() {
-        assert_eq!(
-            prompt_terminal_options().viewport,
-            Viewport::Inline(PROMPT_HEIGHT)
-        );
+    fn viewport_height_is_10() {
+        assert_eq!(VIEWPORT_HEIGHT, 10);
     }
 
     #[test]
     fn clear_prompt_removes_rendered_prompt_lines() {
         let app = app_with(&["git status", "cargo test"]);
-        let backend = TestBackend::new(50, PROMPT_HEIGHT);
-        let mut terminal = Terminal::with_options(backend, prompt_terminal_options()).unwrap();
+        let backend = TestBackend::new(50, VIEWPORT_HEIGHT);
+        let mut terminal = Terminal::new(backend).unwrap();
 
         terminal.draw(|frame| ui::render(frame, &app)).unwrap();
         assert!(line(terminal.backend().buffer(), 0).contains(">"));
 
-        clear_prompt(&mut terminal).unwrap();
+        clear_prompt(&mut terminal, 0).unwrap();
 
         let buffer = terminal.backend().buffer();
         for y in 0..buffer.area.height {

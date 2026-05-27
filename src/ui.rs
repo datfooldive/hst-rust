@@ -85,7 +85,6 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .collect();
 
     let list = List::new(items)
-        .highlight_symbol("> ")
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut list_state = ListState::default();
     if visible_len > 0 && app.selected < visible_len {
@@ -164,12 +163,12 @@ mod tests {
         terminal.draw(|frame| render(frame, &app)).unwrap();
 
         let buffer = terminal.backend().buffer();
-        for x in 2..=4 {
+        for x in 0..=2 {
             let style = buffer[(x, 1)].style();
             assert_eq!(style.fg, Some(Color::Yellow));
             assert!(style.add_modifier.contains(Modifier::BOLD));
         }
-        assert_ne!(buffer[(5, 1)].style().fg, Some(Color::Yellow));
+        assert_ne!(buffer[(3, 1)].style().fg, Some(Color::Yellow));
     }
 
     #[test]
