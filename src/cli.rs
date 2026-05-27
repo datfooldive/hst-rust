@@ -37,7 +37,7 @@ fn render_command(shell: Shell, history_file: Option<&Path>) -> String {
         (Shell::Zsh, None) => String::from("\"${HISTFILE:-$HOME/.zsh_history}\""),
     };
 
-    format!("hst-rust --history-file {history_file}")
+    format!("hst --history-file {history_file}")
 }
 
 fn quote_path(path: &Path) -> String {
@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn no_args_parse_as_tui_mode() {
-        let cli = Cli::try_parse_from(["hst-rust"]).unwrap();
+        let cli = Cli::try_parse_from(["hst"]).unwrap();
 
         assert_eq!(cli.history_file, None);
         assert_eq!(cli.shell, None);
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn history_file_parses_path() {
-        let cli = Cli::try_parse_from(["hst-rust", "--history-file", "~/.zhistory"]).unwrap();
+        let cli = Cli::try_parse_from(["hst", "--history-file", "~/.zhistory"]).unwrap();
 
         assert_eq!(cli.history_file, Some(PathBuf::from("~/.zhistory")));
         assert_eq!(cli.shell, None);
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn shell_bash_parses_hook_mode() {
-        let cli = Cli::try_parse_from(["hst-rust", "--shell", "bash"]).unwrap();
+        let cli = Cli::try_parse_from(["hst", "--shell", "bash"]).unwrap();
 
         assert_eq!(cli.shell, Some(Shell::Bash));
     }
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn shell_zsh_with_history_file_parses_hook_mode_with_path() {
         let cli = Cli::try_parse_from([
-            "hst-rust",
+            "hst",
             "--shell",
             "zsh",
             "--history-file",
@@ -114,7 +114,7 @@ mod tests {
     fn bash_hook_inserts_selected_command_into_readline() {
         let hook = render_hook(Shell::Bash, Some(PathBuf::from("~/.bash_history")));
 
-        assert!(hook.contains("selected=\"$(hst-rust --history-file"));
+        assert!(hook.contains("selected=\"$(hst --history-file"));
         assert!(hook.contains("READLINE_LINE=\"$selected\""));
         assert!(hook.contains("READLINE_POINT=\"${#READLINE_LINE}\""));
     }
@@ -123,7 +123,7 @@ mod tests {
     fn zsh_hook_inserts_selected_command_into_lbuffer() {
         let hook = render_hook(Shell::Zsh, Some(PathBuf::from("~/.zhistory")));
 
-        assert!(hook.contains("selected=\"$(hst-rust --history-file"));
+        assert!(hook.contains("selected=\"$(hst --history-file"));
         assert!(hook.contains("LBUFFER=\"$selected\""));
         assert!(hook.contains("zle reset-prompt"));
     }
