@@ -82,8 +82,14 @@ fn cursor_position() -> Option<(u16, u16)> {
     io::stderr().flush().ok()?;
 
     let mut buf = [0u8; 32];
-    std::thread::sleep(Duration::from_millis(50));
-    let n = tty.read(&mut buf).unwrap_or(0);
+    let mut n = 0;
+    for _ in 0..5 {
+        std::thread::sleep(Duration::from_millis(10));
+        n = tty.read(&mut buf).unwrap_or(0);
+        if n > 0 {
+            break;
+        }
+    }
 
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);
@@ -92,10 +98,14 @@ fn cursor_position() -> Option<(u16, u16)> {
 
     let resp = std::str::from_utf8(&buf[..n]).ok()?;
     let resp = resp.strip_prefix('\x1b')?.strip_prefix('[')?;
+    if resp.starts_with('?') {
+        return None;
+    }
     let resp = resp.strip_suffix('R')?;
-    let mut parts = resp.split(';');
-    let row: u16 = parts.next()?.parse().ok()?;
-    Some((0, row))
+    let (row_str, col_str) = resp.split_once(';')?;
+    let row: u16 = row_str.parse().ok()?;
+    let col: u16 = col_str.parse().ok()?;
+    Some((col, row.saturating_sub(1)))
 }
 
 fn clear_prompt<B: Backend>(terminal: &mut Terminal<B>, start_row: u16) -> std::result::Result<(), B::Error> {
@@ -252,7 +262,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal.draw(|frame| ui::render(frame, &app)).unwrap();
-        assert!(line(terminal.backend().buffer(), 0).contains(">"));
+        assert!(line(terminal.backend().buffer(), 1).contains(">"));
 
         clear_prompt(&mut terminal, 0).unwrap();
 

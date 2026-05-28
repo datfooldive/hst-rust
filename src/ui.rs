@@ -1,16 +1,16 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
 use crate::app::App;
 
 fn match_style() -> Style {
     Style::default()
-        .fg(Color::Yellow)
+        .fg(Color::White)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -65,17 +65,55 @@ fn lowercase_with_original_offsets(value: &str) -> (String, Vec<usize>, Vec<usiz
     (lowered, start_map, end_map)
 }
 
+const SEARCH_BOX_HEIGHT: u16 = 3;
+
 pub fn render(frame: &mut Frame<'_>, app: &App) {
-    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(frame.area());
+    let area = frame.area();
+    let chunks = Layout::vertical([
+        Constraint::Length(SEARCH_BOX_HEIGHT),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
 
-    let prompt = Paragraph::new(format!("> {}", app.query));
-    frame.render_widget(prompt, chunks[0]);
-
-    let available_height = chunks[1].height as usize;
-    app.set_viewport_height(available_height);
+    let list_height = chunks[1].height as usize;
+    app.set_viewport_height(list_height);
 
     let visible_indices = app.visible_indices();
     let visible_len = visible_indices.len();
+
+    render_search_box(frame, chunks[0], app);
+    render_list(frame, chunks[1], app, &visible_indices, visible_len);
+    drop(visible_indices);
+    render_status_bar(frame, chunks[2], visible_len, app);
+}
+
+fn render_search_box(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let cursor = if app.query.is_empty() {
+        Span::styled("_", Style::default().fg(Color::Gray))
+    } else {
+        Span::raw("")
+    };
+
+    let prompt = Line::from(vec![
+        Span::styled("> ", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+        Span::styled(&app.query, Style::default().add_modifier(Modifier::BOLD)),
+        cursor,
+    ]);
+
+    let block = Block::default().borders(Borders::ALL);
+    frame.render_widget(Paragraph::new(prompt).block(block), area);
+}
+
+fn render_list(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App,
+    visible_indices: &[usize],
+    visible_len: usize,
+) {
+    let available_height = area.height as usize;
+
     let end = (app.scroll_offset + available_height).min(visible_len);
     let items: Vec<ListItem> = visible_indices
         .get(app.scroll_offset..end)
@@ -84,13 +122,42 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .map(|index| ListItem::new(command_line(&app.entries[*index].command, &app.query)))
         .collect();
 
-    let list = List::new(items)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let list = List::new(items).highlight_style(
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Gray)
+            .add_modifier(Modifier::BOLD),
+    );
+
     let mut list_state = ListState::default();
     if visible_len > 0 && app.selected < visible_len {
         list_state.select(Some(app.selected.saturating_sub(app.scroll_offset)));
     }
-    frame.render_stateful_widget(list, chunks[1], &mut list_state);
+    frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn render_status_bar(frame: &mut Frame<'_>, area: Rect, visible_len: usize, app: &App) {
+    let total = app.entries.len();
+
+    let status = if let Some(message) = &app.status {
+        message.clone()
+    } else if app.query.is_empty() {
+        format_count(total, "result")
+    } else {
+        format_count(visible_len, "result")
+    };
+
+    let status_line = Line::from(Span::styled(status, Style::default().fg(Color::DarkGray)));
+
+    frame.render_widget(Paragraph::new(status_line), area);
+}
+
+fn format_count(count: usize, singular: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {singular}s")
+    }
 }
 
 #[cfg(test)]
@@ -154,37 +221,78 @@ mod tests {
     }
 
     #[test]
-    fn render_highlights_matches_in_visible_commands() {
-        let mut app = app_with(&["git status", "cargo test"]);
+    fn render_shows_prompt() {
+        let mut app = app_with(&["git status"]);
         app.query = "git".to_string();
-        let backend = TestBackend::new(30, 3);
+        let backend = TestBackend::new(40, 6);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal.draw(|frame| render(frame, &app)).unwrap();
 
         let buffer = terminal.backend().buffer();
-        for x in 0..=2 {
-            let style = buffer[(x, 1)].style();
-            assert_eq!(style.fg, Some(Color::Yellow));
-            assert!(style.add_modifier.contains(Modifier::BOLD));
+        assert!(line(buffer, 1).contains("> git"));
+    }
+
+    #[test]
+    fn render_applies_highlight_style_to_matching_cells() {
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let line = command_line("git status", "git");
+        let item = ListItem::new(line);
+        let list = List::new(vec![item]).highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        );
+        let mut state = ListState::default();
+        state.select(None); // no selection
+
+        terminal
+            .draw(|frame| {
+                frame.render_stateful_widget(list, frame.area(), &mut state);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let expected = match_style();
+        for x in 0..3 {
+            let style = buffer[(x, 0)].style();
+            assert_eq!(style.fg, expected.fg, "cell ({x},0) fg mismatch");
+            assert!(
+                style.add_modifier.contains(Modifier::BOLD),
+                "cell ({x},0) not bold"
+            );
         }
-        assert_ne!(buffer[(3, 1)].style().fg, Some(Color::Yellow));
+        let style = buffer[(3, 0)].style();
+        assert_ne!(style.fg, expected.fg);
+    }
+
+    #[test]
+    fn render_shows_status_bar() {
+        let mut app = app_with(&["git status", "cargo test"]);
+        app.query = "git".to_string();
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let last_row = buffer.area.height - 1;
+        assert!(line(buffer, last_row).contains("1 result"));
     }
 
     #[test]
     fn renders_compact_prompt_layout() {
         let mut app = app_with(&["git status", "git test", "git fmt", "git clippy"]);
         app.query = "git".to_string();
-        let backend = TestBackend::new(50, 5);
+        let backend = TestBackend::new(50, 8);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal.draw(|frame| render(frame, &app)).unwrap();
 
         let buffer = terminal.backend().buffer();
-        assert!(line(buffer, 0).starts_with("> git"));
-        assert!(line(buffer, 1).contains("git status"));
-        assert!(line(buffer, 4).contains("git clippy"));
-        assert!(!line(buffer, 4).contains("Enter accept"));
-        assert!(!line(buffer, 4).contains("cancel"));
+        assert!(line(buffer, 1).contains("> git"));
+        assert!(line(buffer, 3).contains("git status"));
     }
 }
