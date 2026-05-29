@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
@@ -85,23 +85,27 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     render_search_box(frame, chunks[0], app);
     render_list(frame, chunks[1], app, &visible_indices, visible_len);
     drop(visible_indices);
-    render_status_bar(frame, chunks[2], visible_len, app);
+    render_bottom_bar(frame, chunks[2], visible_len, app);
 }
 
 fn render_search_box(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let cursor = if app.query.is_empty() {
-        Span::styled("_", Style::default().fg(Color::Gray))
+        Span::styled("_", Style::default().fg(Color::DarkGray))
     } else {
         Span::raw("")
     };
 
     let prompt = Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+        Span::styled("> ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
         Span::styled(&app.query, Style::default().add_modifier(Modifier::BOLD)),
         cursor,
     ]);
 
-    let block = Block::default().borders(Borders::ALL);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" Filter ")
+        .title_style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD));
     frame.render_widget(Paragraph::new(prompt).block(block), area);
 }
 
@@ -112,6 +116,16 @@ fn render_list(
     visible_indices: &[usize],
     visible_len: usize,
 ) {
+    if visible_len == 0 && !app.query.is_empty() {
+        let empty_msg = Paragraph::new(Line::from(Span::styled(
+            "(no matching commands)",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )))
+        .alignment(Alignment::Center);
+        frame.render_widget(empty_msg, area);
+        return;
+    }
+
     let available_height = area.height as usize;
 
     let end = (app.scroll_offset + available_height).min(visible_len);
@@ -124,8 +138,8 @@ fn render_list(
 
     let list = List::new(items).highlight_style(
         Style::default()
-            .fg(Color::Black)
-            .bg(Color::Gray)
+            .fg(Color::White)
+            .bg(Color::Rgb(32, 32, 38))
             .add_modifier(Modifier::BOLD),
     );
 
@@ -136,28 +150,36 @@ fn render_list(
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn render_status_bar(frame: &mut Frame<'_>, area: Rect, visible_len: usize, app: &App) {
-    let total = app.entries.len();
+fn render_bottom_bar(frame: &mut Frame<'_>, area: Rect, visible_len: usize, app: &App) {
+    let chunks = Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ])
+    .split(area);
 
+    let legend = Line::from(Span::styled(
+        " Up/Down nav | Enter select | Del delete | Esc cancel ",
+        Style::default().fg(Color::DarkGray),
+    ));
+    frame.render_widget(Paragraph::new(legend).alignment(Alignment::Left), chunks[0]);
+
+    let total = app.entries.len();
     let status = if let Some(message) = &app.status {
         message.clone()
     } else if app.query.is_empty() {
-        format_count(total, "result")
+        let shell = match app.source.shell {
+            crate::history::ShellKind::Bash => "bash",
+            crate::history::ShellKind::Zsh => "zsh",
+        };
+        format!("{shell} | {total} {}", if total == 1 { "result" } else { "results" })
     } else {
-        format_count(visible_len, "result")
+        let pct = if total > 0 { (visible_len * 100) / total } else { 0 };
+        let label = if visible_len == 1 { "result" } else { "results" };
+        format!("{visible_len} {label}  ({visible_len}/{total} {pct}%)")
     };
 
     let status_line = Line::from(Span::styled(status, Style::default().fg(Color::DarkGray)));
-
-    frame.render_widget(Paragraph::new(status_line), area);
-}
-
-fn format_count(count: usize, singular: &str) -> String {
-    if count == 1 {
-        format!("1 {singular}")
-    } else {
-        format!("{count} {singular}s")
-    }
+    frame.render_widget(Paragraph::new(status_line).alignment(Alignment::Right), chunks[1]);
 }
 
 #[cfg(test)]
