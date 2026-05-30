@@ -1,4 +1,4 @@
-# hst-rust
+# hst
 
 A small shell history picker for Bash and Zsh.
 
@@ -15,23 +15,23 @@ cargo build --release
 Then make sure the binary is available on your `PATH`:
 
 ```sh
-cp target/release/hst-rust ~/.local/bin/
+cp target/release/hst ~/.local/bin/
 ```
 
 ## Shell setup
 
-`hst-rust` can print a shell hook that binds `Ctrl-R` to the history picker.
+`hst` can print a shell hook that binds `Ctrl-R` to the history picker.
 
 For Bash, add this to your shell config:
 
 ```sh
-eval "$(hst-rust --shell bash)"
+eval "$(hst --shell bash)"
 ```
 
 For Zsh, add this to your shell config:
 
 ```sh
-eval "$(hst-rust --shell zsh)"
+eval "$(hst --shell zsh)"
 ```
 
 Restart your shell, or source your shell config, then press `Ctrl-R`.
